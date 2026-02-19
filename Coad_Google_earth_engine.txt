@@ -1,0 +1,127 @@
+// Import Shp from the collection
+var LR = ee.FeatureCollection("users/anuchit1334mobile/LR");
+
+
+// Sentinel2 Image collection
+var s2 = ee.ImageCollection("COPERNICUS/S2");
+//---------------- Filter ------------------------------------------------------
+
+//Combine 3 in 1 ,Use the . notation to apply all the filters together
+var filtered = s2.filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20))
+  .filter(ee.Filter.date('2020-01-01', '2020-12-31'))
+  .filter(ee.Filter.bounds(LR));
+  
+print('Found=',filtered.size());
+
+// Select the first image in the filtered collection.
+var s2image_first = filtered.first();
+print('First Image in Collection :',s2image_first);
+
+
+//---------------------- Stacking & // Mosaicking Image ------------------------
+// Mosaic() = Stacking & Merge all image , Defalut is recently imagery
+var mosaic = filtered.mosaic();
+print('Mosaic All Image :',mosaic);
+
+// Median() DN value form Collection
+var medianComposite =  filtered.median();
+
+
+//---------------------- Image Cliping  ------------------------
+var clipped = (medianComposite.clip(LR));
+print('Clipped Image:',clipped);
+
+
+
+
+//----------------------- Supervised Classification -------
+//-- Import Sampling data
+var samplefeature = ee.FeatureCollection("users/anuchit1334mobile/ASAS");
+print('SampleData,sample point',samplefeature.getInfo().features);
+
+//--- Overlay the point on image to get training data
+//----Make training dataset
+
+var traing_ing = clipped.select(['B2','B3','B4','B5','B8']);
+var training = traing_ing.sampleRegions({
+    collection: samplefeature,
+    properties: ['LULC'],
+    scale: 10,
+    geometries: true
+});
+
+print('Input Training data,*label',training);
+
+//----------------------- Trainig Model -------
+
+//----------------------- Random forest
+
+var classifier1 = ee.Classifier.smileRandomForest(30);
+var trained1 = classifier1.train({
+    features: training,
+    classProperty: 'LULC',
+    inputProperties: traing_ing.bandNames()
+});
+
+//----------------------- Classify Img
+
+var rfclassified = traing_ing.classify(trained1);
+print('RandomForest Classifi',  rfclassified);
+print('RF Model Ecplain',trained1.explain());
+
+
+
+
+
+//----------------------- Show Result with Google Map API -------
+
+var visualization = {
+  min:[ 0, 100 ,250],
+  max: [2000, 3000, 4000],
+  bands: ['B4', 'B3', 'B2'],
+};
+
+//Add map
+Map.centerObject(LR,10);
+
+//Map.addLayer(mosaic, visualization, 'Mosaic');
+//Map.addLayer(medianComposite, visualization, 'Median Composite');
+Map.addLayer(clipped, visualization, 'Clipped Image');
+Map.addLayer(rfclassified.randomVisualizer(),{}, 'RnadomForest');
+Map.addLayer(LR, {color: 'red'}, 'เขตปฏิรูป');
+
+
+
+//---------------------- Export Satellite Imagery --------------------------------
+
+
+var exportImage = clipped.select('B.*')
+// Checking Image Projection & CRS
+var projection = filtered.first().select('B2').projection().getInfo();
+
+// Export to Google Drive
+Export.image.toDrive({
+    image:rfclassified,
+    description: 'LULC_lavel3',
+    folder: 'earthengine_data',
+    fileNamePrefix: 'lulc_Clip',
+    crs: projection.crs,
+    crsTransform: projection.transform,
+    region: LR,
+    maxPixels: 1e13,
+    fileFormat: 'GeoTIFF'
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
